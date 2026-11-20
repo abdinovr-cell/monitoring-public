@@ -1,0 +1,107 @@
+name: Atyrau University monitoring
+
+on:
+  workflow_dispatch:
+    inputs:
+      full_document_sweep:
+        description: 'Полная обработка очереди документов (обычный обход сайта также выполняется)'
+        required: false
+        type: boolean
+        default: true
+  schedule:
+    # 06:00 and 16:00 Asia/Almaty (UTC+5), Monday through Saturday.
+    - cron: "0 1,11 * * 1-6"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: university-monitor
+  cancel-in-progress: false
+
+jobs:
+  monitor:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    steps:
+      - name: Check out latest main after concurrency lock
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install -r requirements.txt
+          python -m playwright install --with-deps chromium
+          python -m py_compile monitor.py extended_sources.py email_report.py
+          python -m unittest discover -s tests -v
+
+      - name: Run public website monitor
+        run: python -u monitor.py
+        env:
+          MAX_PAGES: "6000"
+          MAX_CONCURRENCY: "5"
+          PAGE_TIMEOUT_MS: "18000"
+          PAGE_WALL_TIMEOUT_SECONDS: "22"
+          RUN_TIMEOUT_SECONDS: "9000"
+          PROGRESS_EVERY: "200"
+
+      - name: Show document processing mode
+        run: |
+          echo "full_document_sweep=${{ github.event_name == 'schedule' || inputs.full_document_sweep }}"
+          echo "MAX_DOCUMENTS=${{ (github.event_name == 'schedule' || inputs.full_document_sweep) && '5000' || '300' }}"
+          echo "EXTENDED_TIMEOUT_SECONDS=${{ (github.event_name == 'schedule' || inputs.full_document_sweep) && '4200' || '1500' }}"
+
+      - name: Run extended source monitor (sitemaps, documents and news)
+        if: success()
+        run: python -u extended_sources.py
+        env:
+          EXTENDED_TIMEOUT_SECONDS: ${{ (github.event_name == 'schedule' || inputs.full_document_sweep) && '4200' || '1500' }}
+          MAX_SITEMAPS: "40"
+          MAX_DOCUMENTS: ${{ (github.event_name == 'schedule' || inputs.full_document_sweep) && '5000' || '300' }}
+          MAX_NEWS_ITEMS: "100"
+
+      - name: Ensure state directory exists
+        if: always()
+        run: mkdir -p state output
+
+      - name: Persist private crawl state in Actions cache
+        if: always()
+        uses: actions/cache@v4
+        with:
+          path: state/
+          key: university-monitor-state-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            university-monitor-state-
+
+      - name: Email report with clickable links
+        if: always()
+        continue-on-error: true
+        env:
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          SMTP_FROM: ${{ secrets.SMTP_FROM }}
+          REPORT_EMAIL_TO: ${{ secrets.REPORT_EMAIL_TO }}
+        run: |
+          if [[ -n "$SMTP_HOST" && -n "$SMTP_PORT" && -n "$SMTP_USERNAME" && -n "$SMTP_PASSWORD" && -n "$REPORT_EMAIL_TO" ]]; then
+            python email_report.py
+          else
+            echo "::warning::Email not sent: configure SMTP_HOST, SMTP_PORT, SMTP_USERNAME, SMTP_PASSWORD and REPORT_EMAIL_TO in repository Actions secrets."
+          fi
+
+      - name: Upload report and progress
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: university-monitor-report
+          path: output/
+          if-no-files-found: warn
+          retention-days: 30
