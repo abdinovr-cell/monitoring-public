@@ -42,6 +42,19 @@ jobs:
           python -m py_compile monitor.py extended_sources.py email_report.py
           python -m unittest discover -s tests -v
 
+      - name: Ensure state directory exists
+        if: always()
+        run: mkdir -p state output
+
+      - name: Persist private crawl state in Actions cache
+        if: always()
+        uses: actions/cache@v4
+        with:
+          path: state/
+          key: university-monitor-state-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            university-monitor-state-
+
       - name: Run public website monitor
         run: python -u monitor.py
         env:
@@ -67,18 +80,6 @@ jobs:
           MAX_DOCUMENTS: ${{ (github.event_name == 'schedule' || inputs.full_document_sweep) && '5000' || '300' }}
           MAX_NEWS_ITEMS: "100"
 
-      - name: Ensure state directory exists
-        if: always()
-        run: mkdir -p state output
-
-      - name: Persist private crawl state in Actions cache
-        if: always()
-        uses: actions/cache@v4
-        with:
-          path: state/
-          key: university-monitor-state-${{ github.run_id }}-${{ github.run_attempt }}
-          restore-keys: |
-            university-monitor-state-
 
       - name: Email report with clickable links
         if: always()
