@@ -1,0 +1,33 @@
+name: Validate monitor code
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "monitor.py"
+      - "extended_sources.py"
+      - "email_report.py"
+      - ".github/workflows/monitor.yml"
+      - ".github/workflows/validate.yml"
+      - "tests/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  syntax:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install test dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Compile all monitor scripts
+        run: |
+          python -m py_compile monitor.py extended_sources.py email_report.py
+          python -m unittest discover -s tests -v
